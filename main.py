@@ -6,6 +6,9 @@ import json
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BASE_URL = "https://anekdotovstreet.com"
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
@@ -113,7 +116,6 @@ def scan_categories():
         result[category] = page - 1
         processed += 1
 
-    # Финальное сообщение
     print(f"{'Категории обновлены.'}".ljust(MAX_LINE_LENGTH), flush=True)
 
     now = datetime.now()
