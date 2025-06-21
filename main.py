@@ -60,7 +60,7 @@ def scan_categories():
     result = {}
 
     for category in CATEGORIES:
-        for page in range(1, 100):
+        for page in range(1, 1000):
             url = f"{BASE_URL}/{category}/" + (f"{page}/" if page > 1 else "")
             try:
                 r = requests.get(url, headers=headers, timeout=10)
@@ -134,7 +134,7 @@ def send_to_discord(text):
             logging.warning(f"Код ответа {r.status_code} (попытка {attempt})")
         except Exception as e:
             logging.error(f"Ошибка отправки (попытка {attempt}): {e}")
-        time.sleep(30)
+        time.sleep(10)
     return False
 
 
@@ -171,7 +171,7 @@ def main():
             else:
                 logging.info("Нет новых анекдотов.")
 
-            time.sleep(10)
+            time.sleep(21600)
     except KeyboardInterrupt:
         logging.info("Бот остановлен вручную (Ctrl + C)")
         exit(0)
