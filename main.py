@@ -88,10 +88,11 @@ def scan_categories():
     result = {}
     total = len(CATEGORIES)
     processed = 0
-    MAX_LINE_LENGTH = 80
-    print(f"Сканирование: 0/{total} категорий".ljust(MAX_LINE_LENGTH), end="", flush=True)
+    MAX_LINE_LENGTH = 100
 
-    for category in CATEGORIES:
+    print(f"{'Сканирование: 0/0 (нет данных)'}".ljust(MAX_LINE_LENGTH), end="\r", flush=True)
+
+    for idx, category in enumerate(CATEGORIES):
         page = 1
         while True:
             url = f"{BASE_URL}/{category}/" + (f"{page}/" if page > 1 else "")
@@ -102,13 +103,19 @@ def scan_categories():
             except Exception as e:
                 logging.error(f"Ошибка при сканировании {url}: {e}")
                 break
+
+            progress_str = f"Сканирование: {idx+1}/{total} ({category}: страница {page})"
+            print(f"{progress_str}".ljust(MAX_LINE_LENGTH), end="\r", flush=True)
+
             page += 1
             time.sleep(0.1)
+
         result[category] = page - 1
         processed += 1
-        print(f"\rСканирование: {processed}/{total} категорий обработано".ljust(MAX_LINE_LENGTH), end="", flush=True)
 
-    print(f"\r{'Категории обновлены.'.ljust(MAX_LINE_LENGTH)}")
+    # Финальное сообщение
+    print(f"{'Категории обновлены.'}".ljust(MAX_LINE_LENGTH), flush=True)
+
     now = datetime.now()
     data = {
         "last_scan": now.isoformat(),
