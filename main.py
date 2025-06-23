@@ -3,6 +3,7 @@ import time
 import random
 import logging
 import json
+from typing import Any, Dict, List, Optional, Callable
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 import requests
@@ -37,119 +38,132 @@ CATEGORIES = [
     "raznoe-3", "populyarnye-anekdoty", "svegie-anekdoty"
 ]
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("anekdot_bot.log", encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
 
-def retry_with_backoff(max_retries=5, base_delay=5, max_delay=60):
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            retries = 0
+def retry_with_backoff(base_delay: int = 5, max_delay: int = 300) -> Callable:
+    def decorator(func: Callable) -> Callable:
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
             delay = base_delay
-            while retries < max_retries:
+            while True:
                 try:
                     return func(*args, **kwargs)
-                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout, ConnectionResetError) as e:
-                    logging.warning(f"Сетевая ошибка: {e}. Повтор через {delay} сек.")
-                    time.sleep(delay)
-                    retries += 1
-                    delay = min(delay * 2, max_delay)
-            logging.error("Превышено количество попыток. Прерываю операцию.")
-            return None
+                except (
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    ConnectionResetError
+                ) as e:
+                    logging.warning(f"Network error: {e}. Retrying in {delay} seconds.")
+                except Exception as e:
+                    logging.error(f"Unexpected error: {e}. Retrying in {delay} seconds.")
+                time.sleep(delay)
+                delay = min(delay * 2, max_delay)
         return wrapper
     return decorator
 
-def check_internet_connection():
-    try:
-        requests.get("https://www.google.com",  timeout=5)
-        return True
-    except requests.exceptions.ConnectionError:
-        return False
 
-def load_sent():
+def check_internet_connection() -> bool:
+    urls = ["https://www.google.com",  "https://discord.com"]
+    for url in urls:
+        try:
+            requests.get(url, timeout=5)
+        except requests.exceptions.ConnectionError as e:
+            logging.warning(f"No connection to {url}: {e}")
+            return False
+    return True
+
+
+def load_sent() -> Dict[str, Dict[str, str]]:
     if not os.path.exists(SENT_FILE):
         return {}
     try:
-        with open(SENT_FILE, "r", encoding="utf-8") as f:
+        with open(SENT_FILE, "r", encoding="utf-8") as file:
             if os.path.getsize(SENT_FILE) == 0:
-                logging.warning("Файл sent_anekdots.json пустой")
                 return {}
-            return json.load(f)
+            return json.load(file)
     except Exception as e:
-        logging.error(f"Ошибка чтения файла {SENT_FILE}: {e}")
+        logging.error(f"Failed to read {SENT_FILE}: {e}")
         return {}
 
-def save_sent(sent_dict):
-    try:
-        with open(SENT_FILE, "w", encoding="utf-8") as f:
-            json.dump(sent_dict, f, ensure_ascii=False, indent=2)
-        logging.info("Сохранены отправленные анекдоты")
-    except Exception as e:
-        logging.error(f"Ошибка записи файла {SENT_FILE}: {e}")
 
-def scan_categories():
-    logging.info("Сканирование категорий...")
+def save_sent(sent_dict: Dict[str, Dict[str, str]]) -> None:
+    try:
+        with open(SENT_FILE, "w", encoding="utf-8") as file:
+            json.dump(sent_dict, file, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logging.error(f"Failed to write {SENT_FILE}: {e}")
+
+
+def cleanup_sent(sent_dict: Dict[str, Dict[str, str]], days: int = 30) -> None:
+    cutoff = datetime.now() - timedelta(days=days)
+    keys_to_delete = [
+        key for key, value in sent_dict.items()
+        if datetime.fromisoformat(value["timestamp"]) < cutoff
+    ]
+    for key in keys_to_delete:
+        del sent_dict[key]
+
+
+def scan_categories() -> Dict[str, Any]:
+    logging.info("Scanning categories...")
     headers = {"User-Agent": "Mozilla/5.0"}
     result = {}
     total = len(CATEGORIES)
-    processed = 0
-    MAX_LINE_LENGTH = 100
 
-    print(f"{'Сканирование: 0/0 (нет данных)'}".ljust(MAX_LINE_LENGTH), end="\r", flush=True)
-
-    for idx, category in enumerate(CATEGORIES):
+    for idx, category in enumerate(CATEGORIES, start=1):
         page = 1
         while True:
             url = f"{BASE_URL}/{category}/" + (f"{page}/" if page > 1 else "")
             try:
-                r = requests.get(url, headers=headers, timeout=10)
-                if r.status_code == 404:
+                response = requests.get(url, headers=headers, timeout=10)
+                if response.status_code == 404:
                     break
             except Exception as e:
-                logging.error(f"Ошибка при сканировании {url}: {e}")
+                logging.warning(f"Request error for {url}: {e}")
                 break
-
-            progress_str = f"Сканирование: {idx+1}/{total} ({category}: страница {page})"
-            print(f"{progress_str}".ljust(MAX_LINE_LENGTH), end="\r", flush=True)
 
             page += 1
             time.sleep(0.1)
 
         result[category] = page - 1
-        processed += 1
 
-    print(f"{'Категории обновлены.'}".ljust(MAX_LINE_LENGTH), flush=True)
-
-    now = datetime.now()
     data = {
-        "last_scan": now.isoformat(),
-        "next_scan": (now + timedelta(hours=CHECK_INTERVAL_HOURS)).isoformat(),
+        "last_scan": datetime.now().isoformat(),
+        "next_scan": (datetime.now() + timedelta(hours=CHECK_INTERVAL_HOURS)).isoformat(),
         "categories": result
     }
 
     try:
-        with open(CATEGORY_MAP_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        logging.info("Категории обновлены")
+        with open(CATEGORY_MAP_FILE, "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+        logging.info("Categories updated")
     except Exception as e:
-        logging.error(f"Ошибка записи файла {CATEGORY_MAP_FILE}: {e}")
+        logging.error(f"Failed to write {CATEGORY_MAP_FILE}: {e}")
 
     return data
 
-def load_category_map():
+
+def load_category_map() -> Dict[str, Any]:
     if os.path.exists(CATEGORY_MAP_FILE):
         try:
-            with open(CATEGORY_MAP_FILE, "r", encoding="utf-8") as f:
+            with open(CATEGORY_MAP_FILE, "r", encoding="utf-8") as file:
                 if os.path.getsize(CATEGORY_MAP_FILE) == 0:
-                    logging.warning("Файл category_pages.json пустой")
                     return scan_categories()
-                return json.load(f)
+                return json.load(file)
         except Exception as e:
-            logging.error(f"Ошибка чтения файла {CATEGORY_MAP_FILE}: {e}")
+            logging.error(f"Failed to read {CATEGORY_MAP_FILE}: {e}")
     return scan_categories()
 
-@retry_with_backoff()
-def get_anekdots_from_category(category, max_pages):
-    headers = {"User-Agent": "Mozilla/5.0"}
 
+@retry_with_backoff()
+def get_anekdots_from_category(category: str, max_pages: int) -> List[Dict[str, str]]:
+    headers = {"User-Agent": "Mozilla/5.0"}
     if category == "svegie-anekdoty":
         date = (datetime.now() - timedelta(days=random.randint(0, 30))).strftime("%Y-%m-%d")
         url = f"{BASE_URL}/date/{date}/"
@@ -157,69 +171,47 @@ def get_anekdots_from_category(category, max_pages):
         page = random.randint(1, max_pages)
         url = f"{BASE_URL}/{category}/" + (f"{page}/" if page > 1 else "")
 
-    try:
-        logging.info(f"Парсинг: {url}")
-        r = requests.get(url, headers=headers, timeout=10)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        anekdots = []
+    response = requests.get(url, headers=headers, timeout=10)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    anekdots = []
 
-        for block in soup.find_all("div", class_="anekdot-text"):
-            p = block.find("p")
-            if not p:
-                continue
+    for block in soup.find_all("div", class_="anekdot-text"):
+        parent_div = block.find_parent("div", class_="row")
+        if not parent_div:
+            continue
 
-            text = p.get_text("\n", strip=True)
-            parent_div = block.find_parent("div", class_="row")
+        vote_span = parent_div.find("span", id=lambda x: x and x.startswith("anekdot"))
+        if not vote_span:
+            continue
 
-            if not parent_div:
-                continue
+        anek_id = vote_span.get("id").replace("anekdot", "")
+        paragraph = block.find("p")
+        if not paragraph:
+            continue
 
-            vote_span = parent_div.find("span", id=lambda x: x and x.startswith("anekdot"))
+        text = paragraph.get_text("\n", strip=True)
+        anekdots.append({"id": anek_id, "text": text})
 
-            if not vote_span:
-                continue
+    return anekdots
 
-            anek_id = vote_span.get("id").replace("anekdot", "")
-            link_tag = parent_div.find("a", href=True)
-
-            if link_tag:
-                href = link_tag["href"]
-                if href.startswith(("http://", "https://")):
-                    url = href
-                else:
-                    url = BASE_URL + href
-            else:
-                url = None
-
-            anekdots.append({"id": anek_id, "text": text})
-
-        return anekdots
-    except Exception as e:
-        logging.error(f"Ошибка парсинга {category}: {e}")
-        return []
 
 @retry_with_backoff()
-def send_to_discord(text):
+def send_to_discord(text: str) -> bool:
     content = text[:1990] + "..." if len(text) > 1990 else text
     payload = {"content": content}
 
-    for attempt in range(1, 6):
-        try:
-            r = requests.post(WEBHOOK_URL, json=payload)
-            if r.status_code == 204:
-                logging.info(f"Отправлено (попытка {attempt})")
-                return True
-            logging.warning(f"Код ответа {r.status_code} (попытка {attempt})")
-        except Exception as e:
-            logging.error(f"Ошибка отправки (попытка {attempt}): {e}")
-        time.sleep(10)
-
+    response = requests.post(WEBHOOK_URL, json=payload)
+    if response.status_code == 204:
+        logging.info("Message successfully sent to Discord.")
+        return True
+    logging.warning(f"Discord returned status code {response.status_code}")
     return False
 
-def main():
+
+def main() -> None:
     if not WEBHOOK_URL:
-        logging.critical("WEBHOOK_URL не установлен!")
+        logging.critical("WEBHOOK_URL is not set.")
         return
 
     sent = load_sent()
@@ -227,41 +219,39 @@ def main():
     category_map = data.get("categories", {})
     next_scan = datetime.fromisoformat(data.get("next_scan", "1970-01-01T00:00:00"))
 
-    logging.info(f"Интервал между отправками: {MESSAGE_INTERVAL_SECONDS} секунд")
-    logging.info("Бот запущен")
+    logging.info(f"Message interval: {MESSAGE_INTERVAL_SECONDS} seconds")
+    logging.info("Bot started.")
 
     try:
         while True:
             if not check_internet_connection():
-                logging.warning("Нет подключения к интернету. Ожидание 5 минут...")
-                time.sleep(300)
+                logging.warning("No internet connection. Waiting 10 seconds...")
+                time.sleep(10)
                 continue
 
-            current_time = datetime.now()
-
-            if current_time >= next_scan:
-                logging.info("Обновление карты категорий")
+            if datetime.now() >= next_scan:
                 data = scan_categories()
                 category_map = data["categories"]
                 next_scan = datetime.fromisoformat(data["next_scan"])
 
             category = random.choice(CATEGORIES)
             anekdots = get_anekdots_from_category(category, category_map.get(category, 10))
-            category_sent = sent.get(category, {})
-            new = [a for a in anekdots if a["id"] not in category_sent]
 
-            if new:
-                a = random.choice(new)
-                if send_to_discord(a["text"]):
-                    sent.setdefault(category, {})[a["id"]] = {"text": a["text"]}
+            new_anekdots = [a for a in anekdots if a["id"] not in sent]
+            if new_anekdots:
+                selected = random.choice(new_anekdots)
+                if send_to_discord(selected["text"]):
+                    sent[selected["id"]] = {"timestamp": datetime.now().isoformat(), "text": selected["text"]}
+                    cleanup_sent(sent)
                     save_sent(sent)
             else:
-                logging.info("Нет новых анекдотов.")
+                logging.info("No new jokes found.")
 
             time.sleep(MESSAGE_INTERVAL_SECONDS)
+
     except KeyboardInterrupt:
-        logging.info("Бот остановлен вручную (Ctrl + C)")
-        exit(0)
+        logging.info("Bot manually stopped.")
+
 
 if __name__ == "__main__":
     main()
